@@ -35,28 +35,41 @@ bool D3D11Hook::Initialize() {
     
     // Get D3D11 function addresses by creating a temporary device
     if (!GetD3D11Addresses()) {
+        OutputDebugStringA("FrameGen: GetD3D11Addresses failed\n");
+        return false;
+    }
+    
+    // Validate that we got valid function pointers
+    if (!m_originalPresent || !m_originalResizeBuffers) {
+        OutputDebugStringA("FrameGen: Invalid function pointers\n");
         return false;
     }
     
     // Create hooks
-    if (MH_CreateHook(reinterpret_cast<LPVOID>(m_originalPresent), 
+    MH_STATUS status = MH_CreateHook(reinterpret_cast<LPVOID>(m_originalPresent), 
                       reinterpret_cast<LPVOID>(&HookedPresent),
-                      reinterpret_cast<LPVOID*>(&m_originalPresent)) != MH_OK) {
+                      reinterpret_cast<LPVOID*>(&m_originalPresent));
+    if (status != MH_OK) {
+        OutputDebugStringA("FrameGen: MH_CreateHook(Present) failed\n");
         return false;
     }
     
-    if (MH_CreateHook(reinterpret_cast<LPVOID>(m_originalResizeBuffers),
+    status = MH_CreateHook(reinterpret_cast<LPVOID>(m_originalResizeBuffers),
                       reinterpret_cast<LPVOID>(&HookedResizeBuffers),
-                      reinterpret_cast<LPVOID*>(&m_originalResizeBuffers)) != MH_OK) {
+                      reinterpret_cast<LPVOID*>(&m_originalResizeBuffers));
+    if (status != MH_OK) {
+        OutputDebugStringA("FrameGen: MH_CreateHook(ResizeBuffers) failed\n");
         return false;
     }
     
     // Enable hooks
     if (MH_EnableHook(m_originalPresent) != MH_OK) {
+        OutputDebugStringA("FrameGen: MH_EnableHook(Present) failed\n");
         return false;
     }
     
     if (MH_EnableHook(m_originalResizeBuffers) != MH_OK) {
+        OutputDebugStringA("FrameGen: MH_EnableHook(ResizeBuffers) failed\n");
         return false;
     }
     
@@ -80,12 +93,19 @@ bool D3D11Hook::GetD3D11Addresses() {
     WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, DefWindowProc, 0L, 0L, 
                       GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, 
                       L"FrameGenTemp", nullptr };
-    RegisterClassEx(&wc);
+    
+    if (!RegisterClassEx(&wc)) {
+        OutputDebugStringA("FrameGen: RegisterClassEx failed\n");
+    }
     
     HWND hwnd = CreateWindow(wc.lpszClassName, L"FrameGenTemp", WS_OVERLAPPEDWINDOW,
                              0, 0, 100, 100, nullptr, nullptr, wc.hInstance, nullptr);
     
-    if (!hwnd) return false;
+    if (!hwnd) {
+        OutputDebugStringA("FrameGen: CreateWindow failed\n");
+        UnregisterClass(wc.lpszClassName, wc.hInstance);
+        return false;
+    }
     
     // Create D3D11 device and swap chain
     DXGI_SWAP_CHAIN_DESC scDesc = {};
@@ -106,12 +126,24 @@ bool D3D11Hook::GetD3D11Addresses() {
     IDXGISwapChain* tempSwapChain = nullptr;
     
     D3D_FEATURE_LEVEL featureLevel;
+    
+    // Try hardware first, then software fallback
     HRESULT hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
                                                 0, nullptr, 0, D3D11_SDK_VERSION,
                                                 &scDesc, &tempSwapChain, &tempDevice,
                                                 &featureLevel, &tempContext);
     
+    // If hardware fails, try WARP (software renderer)
     if (FAILED(hr)) {
+        OutputDebugStringA("FrameGen: D3D11CreateDeviceAndSwapChain(HARDWARE) failed, trying WARP\n");
+        hr = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr,
+                                            0, nullptr, 0, D3D11_SDK_VERSION,
+                                            &scDesc, &tempSwapChain, &tempDevice,
+                                            &featureLevel, &tempContext);
+    }
+    
+    if (FAILED(hr)) {
+        OutputDebugStringA("FrameGen: D3D11CreateDeviceAndSwapChain(WARP) also failed\n");
         DestroyWindow(hwnd);
         UnregisterClass(wc.lpszClassName, wc.hInstance);
         return false;
@@ -126,6 +158,8 @@ bool D3D11Hook::GetD3D11Addresses() {
     void** contextVTable = *(void***)tempContext;
     m_originalDrawIndexed = (DrawIndexed_t)contextVTable[12]; // DrawIndexed
     m_originalDraw = (Draw_t)contextVTable[13];              // Draw
+    
+    OutputDebugStringA("FrameGen: Got VTable addresses - Present, ResizeBuffers\n");
     
     // Cleanup
     tempSwapChain->Release();
@@ -192,8 +226,17 @@ void D3D11Hook::ReleaseRenderTarget() {
 HRESULT __stdcall D3D11Hook::HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags) {
     D3D11Hook* self = s_instance;
     
-    // Call original if self is null
+    // Call original if self is null - this should never happen but safety first
     if (!self || !self->m_originalPresent) {
+        // Fallback: try to call Present directly through vtable
+        if (pSwapChain) {
+            void** vtable = *(void***)pSwapChain;
+            typedef HRESULT (__stdcall* Present_t)(IDXGISwapChain*, UINT, UINT);
+            Present_t present = (Present_t)vtable[8];
+            if (present) {
+                return present(pSwapChain, SyncInterval, Flags);
+            }
+        }
         return DXGI_ERROR_INVALID_CALL;
     }
     
@@ -283,8 +326,17 @@ HRESULT __stdcall D3D11Hook::HookedResizeBuffers(IDXGISwapChain* pSwapChain, UIN
                                                    UINT SwapChainFlags) {
     D3D11Hook* self = s_instance;
     
-    // Call original if self is null
+    // Call original if self is null - safety fallback
     if (!self || !self->m_originalResizeBuffers) {
+        // Fallback: try to call ResizeBuffers directly through vtable
+        if (pSwapChain) {
+            void** vtable = *(void***)pSwapChain;
+            typedef HRESULT (__stdcall* ResizeBuffers_t)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+            ResizeBuffers_t resizeBuffers = (ResizeBuffers_t)vtable[13];
+            if (resizeBuffers) {
+                return resizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
+            }
+        }
         return DXGI_ERROR_INVALID_CALL;
     }
     
