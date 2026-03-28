@@ -147,9 +147,10 @@ extern "C" {
     HRESULT WINAPI D3D11CreateBlob() { return E_NOTIMPL; }
 }
 
-// Proxy function implementations - MUST match exports.def
+// Proxy function implementations - use different internal names to avoid conflicts
+// Export them via exports.def with correct names
 extern "C" {
-    __declspec(dllexport) HRESULT WINAPI D3D11CreateDevice(
+    HRESULT WINAPI Proxy_D3D11CreateDevice(
         IDXGIAdapter* pAdapter,
         D3D_DRIVER_TYPE DriverType,
         HMODULE Software,
@@ -187,7 +188,7 @@ extern "C" {
         return hr;
     }
 
-    __declspec(dllexport) HRESULT WINAPI D3D11CreateDeviceAndSwapChain(
+    HRESULT WINAPI Proxy_D3D11CreateDeviceAndSwapChain(
         IDXGIAdapter* pAdapter,
         D3D_DRIVER_TYPE DriverType,
         HMODULE Software,
