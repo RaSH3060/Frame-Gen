@@ -19,6 +19,7 @@
 #include <deque>
 #include <cmath>
 #include <chrono>
+#include <cstdio>
 
 #include "MinHook.h"
 #include "d3d11_hook.h"
@@ -76,9 +77,10 @@ typedef HRESULT(WINAPI* D3D11CreateDeviceAndSwapChain_t)(
 
 static D3D11CreateDevice_t s_originalD3D11CreateDevice = nullptr;
 static D3D11CreateDeviceAndSwapChain_t s_originalD3D11CreateDeviceAndSwapChain = nullptr;
+static HMODULE s_realD3D11 = nullptr;
 
 static void LoadOriginalD3D11() {
-    if (s_originalD3D11CreateDevice) return;
+    if (s_realD3D11) return;
     
     // Get system directory
     char systemDir[MAX_PATH];
@@ -88,15 +90,19 @@ static void LoadOriginalD3D11() {
     char realD3D11Path[MAX_PATH];
     snprintf(realD3D11Path, MAX_PATH, "%s\\d3d11.dll", systemDir);
     
-    HMODULE realD3D11 = LoadLibraryA(realD3D11Path);
-    if (!realD3D11) {
+    s_realD3D11 = LoadLibraryA(realD3D11Path);
+    if (!s_realD3D11) {
         // Fallback - try loading without path
-        realD3D11 = LoadLibraryA("d3d11.dll");
+        s_realD3D11 = LoadLibraryA("d3d11.dll");
     }
     
-    if (realD3D11) {
-        s_originalD3D11CreateDevice = (D3D11CreateDevice_t)GetProcAddress(realD3D11, "D3D11CreateDevice");
-        s_originalD3D11CreateDeviceAndSwapChain = (D3D11CreateDeviceAndSwapChain_t)GetProcAddress(realD3D11, "D3D11CreateDeviceAndSwapChain");
+    if (s_realD3D11) {
+        s_originalD3D11CreateDevice = (D3D11CreateDevice_t)GetProcAddress(s_realD3D11, "D3D11CreateDevice");
+        s_originalD3D11CreateDeviceAndSwapChain = (D3D11CreateDeviceAndSwapChain_t)GetProcAddress(s_realD3D11, "D3D11CreateDeviceAndSwapChain");
+        
+        OutputDebugStringA("FrameGen: Loaded original D3D11 functions\n");
+    } else {
+        OutputDebugStringA("FrameGen: Failed to load original d3d11.dll\n");
     }
 }
 
@@ -118,6 +124,20 @@ extern "C" {
             return s_originalD3D11CreateDevice(pAdapter, DriverType, Software, Flags, 
                                                pFeatureLevels, FeatureLevels, SDKVersion,
                                                ppDevice, pFeatureLevel, ppImmediateContext);
+        }
+        // Fallback - try to load real d3d11.dll again and call directly
+        char systemDir[MAX_PATH];
+        GetSystemDirectoryA(systemDir, MAX_PATH);
+        char realD3D11Path[MAX_PATH];
+        snprintf(realD3D11Path, MAX_PATH, "%s\\d3d11.dll", systemDir);
+        HMODULE realD3D11 = LoadLibraryA(realD3D11Path);
+        if (realD3D11) {
+            D3D11CreateDevice_t func = (D3D11CreateDevice_t)GetProcAddress(realD3D11, "D3D11CreateDevice");
+            if (func) {
+                return func(pAdapter, DriverType, Software, Flags, 
+                           pFeatureLevels, FeatureLevels, SDKVersion,
+                           ppDevice, pFeatureLevel, ppImmediateContext);
+            }
         }
         return E_FAIL;
     }
@@ -143,6 +163,21 @@ extern "C" {
                                                            pSwapChainDesc, ppSwapChain, ppDevice,
                                                            pFeatureLevel, ppImmediateContext);
         }
+        // Fallback - try to load real d3d11.dll again and call directly
+        char systemDir[MAX_PATH];
+        GetSystemDirectoryA(systemDir, MAX_PATH);
+        char realD3D11Path[MAX_PATH];
+        snprintf(realD3D11Path, MAX_PATH, "%s\\d3d11.dll", systemDir);
+        HMODULE realD3D11 = LoadLibraryA(realD3D11Path);
+        if (realD3D11) {
+            D3D11CreateDeviceAndSwapChain_t func = (D3D11CreateDeviceAndSwapChain_t)GetProcAddress(realD3D11, "D3D11CreateDeviceAndSwapChain");
+            if (func) {
+                return func(pAdapter, DriverType, Software, Flags,
+                           pFeatureLevels, FeatureLevels, SDKVersion,
+                           pSwapChainDesc, ppSwapChain, ppDevice,
+                           pFeatureLevel, ppImmediateContext);
+            }
+        }
         return E_FAIL;
     }
 }
@@ -162,12 +197,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 }
 
 DWORD WINAPI MainThread(LPVOID lpParam) {
-    // Wait for game to fully load
-    Sleep(3000);
+    // Wait for D3D11 to be loaded and game to fully initialize
+    // Don't wait too long - let the game start first
+    Sleep(1000);
     
+    // Initialize in background - don't block if it fails
     if (!Initialize()) {
-        MessageBoxA(nullptr, "FrameGen: Failed to initialize!", "FrameGen Error", MB_ICONERROR);
-        return 1;
+        // Log error but don't show MessageBox - it can crash some games
+        OutputDebugStringA("FrameGen: Failed to initialize!\n");
     }
     
     return 0;
