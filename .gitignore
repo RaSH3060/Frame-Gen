@@ -9,15 +9,15 @@
 *.out
 build/
 dist/
-target/
 
 # Dependencies
-node_modules/
-venv/
 .venv/
+venv/
+node_modules/
 __pycache__/
 .mypy_cache/
 .pytest_cache/
+target/
 .gradle/
 
 # Logs and temp files
