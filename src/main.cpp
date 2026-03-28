@@ -45,6 +45,108 @@ bool Initialize();
 void Shutdown();
 DWORD WINAPI MainThread(LPVOID lpParam);
 
+// D3D11 proxy exports - forward to real d3d11.dll
+typedef HRESULT(WINAPI* D3D11CreateDevice_t)(
+    IDXGIAdapter* pAdapter,
+    D3D_DRIVER_TYPE DriverType,
+    HMODULE Software,
+    UINT Flags,
+    const D3D_FEATURE_LEVEL* pFeatureLevels,
+    UINT FeatureLevels,
+    UINT SDKVersion,
+    ID3D11Device** ppDevice,
+    D3D_FEATURE_LEVEL* pFeatureLevel,
+    ID3D11DeviceContext** ppImmediateContext
+);
+
+typedef HRESULT(WINAPI* D3D11CreateDeviceAndSwapChain_t)(
+    IDXGIAdapter* pAdapter,
+    D3D_DRIVER_TYPE DriverType,
+    HMODULE Software,
+    UINT Flags,
+    const D3D_FEATURE_LEVEL* pFeatureLevels,
+    UINT FeatureLevels,
+    UINT SDKVersion,
+    const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
+    IDXGISwapChain** ppSwapChain,
+    ID3D11Device** ppDevice,
+    D3D_FEATURE_LEVEL* pFeatureLevel,
+    ID3D11DeviceContext** ppImmediateContext
+);
+
+static D3D11CreateDevice_t s_originalD3D11CreateDevice = nullptr;
+static D3D11CreateDeviceAndSwapChain_t s_originalD3D11CreateDeviceAndSwapChain = nullptr;
+
+static void LoadOriginalD3D11() {
+    if (s_originalD3D11CreateDevice) return;
+    
+    // Get system directory
+    char systemDir[MAX_PATH];
+    GetSystemDirectoryA(systemDir, MAX_PATH);
+    
+    // Build path to real d3d11.dll
+    char realD3D11Path[MAX_PATH];
+    snprintf(realD3D11Path, MAX_PATH, "%s\\d3d11.dll", systemDir);
+    
+    HMODULE realD3D11 = LoadLibraryA(realD3D11Path);
+    if (!realD3D11) {
+        // Fallback - try loading without path
+        realD3D11 = LoadLibraryA("d3d11.dll");
+    }
+    
+    if (realD3D11) {
+        s_originalD3D11CreateDevice = (D3D11CreateDevice_t)GetProcAddress(realD3D11, "D3D11CreateDevice");
+        s_originalD3D11CreateDeviceAndSwapChain = (D3D11CreateDeviceAndSwapChain_t)GetProcAddress(realD3D11, "D3D11CreateDeviceAndSwapChain");
+    }
+}
+
+extern "C" {
+    HRESULT WINAPI D3D11CreateDevice(
+        IDXGIAdapter* pAdapter,
+        D3D_DRIVER_TYPE DriverType,
+        HMODULE Software,
+        UINT Flags,
+        const D3D_FEATURE_LEVEL* pFeatureLevels,
+        UINT FeatureLevels,
+        UINT SDKVersion,
+        ID3D11Device** ppDevice,
+        D3D_FEATURE_LEVEL* pFeatureLevel,
+        ID3D11DeviceContext** ppImmediateContext
+    ) {
+        LoadOriginalD3D11();
+        if (s_originalD3D11CreateDevice) {
+            return s_originalD3D11CreateDevice(pAdapter, DriverType, Software, Flags, 
+                                               pFeatureLevels, FeatureLevels, SDKVersion,
+                                               ppDevice, pFeatureLevel, ppImmediateContext);
+        }
+        return E_FAIL;
+    }
+
+    HRESULT WINAPI D3D11CreateDeviceAndSwapChain(
+        IDXGIAdapter* pAdapter,
+        D3D_DRIVER_TYPE DriverType,
+        HMODULE Software,
+        UINT Flags,
+        const D3D_FEATURE_LEVEL* pFeatureLevels,
+        UINT FeatureLevels,
+        UINT SDKVersion,
+        const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc,
+        IDXGISwapChain** ppSwapChain,
+        ID3D11Device** ppDevice,
+        D3D_FEATURE_LEVEL* pFeatureLevel,
+        ID3D11DeviceContext** ppImmediateContext
+    ) {
+        LoadOriginalD3D11();
+        if (s_originalD3D11CreateDeviceAndSwapChain) {
+            return s_originalD3D11CreateDeviceAndSwapChain(pAdapter, DriverType, Software, Flags,
+                                                           pFeatureLevels, FeatureLevels, SDKVersion,
+                                                           pSwapChainDesc, ppSwapChain, ppDevice,
+                                                           pFeatureLevel, ppImmediateContext);
+        }
+        return E_FAIL;
+    }
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:

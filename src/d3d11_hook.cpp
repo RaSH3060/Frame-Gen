@@ -191,7 +191,16 @@ void D3D11Hook::ReleaseRenderTarget() {
 
 HRESULT __stdcall D3D11Hook::HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags) {
     D3D11Hook* self = s_instance;
-    if (!self) return self->m_originalPresent(pSwapChain, SyncInterval, Flags);
+    
+    // Call original if self is null
+    if (!self || !self->m_originalPresent) {
+        return DXGI_ERROR_INVALID_CALL;
+    }
+    
+    // Process input
+    if (self->m_inputManager) {
+        self->m_inputManager->Update();
+    }
     
     // Initialize on first call
     if (!self->m_mainRenderTargetView) {
@@ -200,39 +209,41 @@ HRESULT __stdcall D3D11Hook::HookedPresent(IDXGISwapChain* pSwapChain, UINT Sync
         }
         
         // Initialize interpolator
-        self->m_interpolator->Initialize(self->m_device, self->m_context, self->m_width, self->m_height);
+        if (self->m_interpolator) {
+            self->m_interpolator->Initialize(self->m_device, self->m_context, self->m_width, self->m_height);
+        }
         
         // Initialize menu
-        self->m_menu->Initialize(self->m_device, self->m_context);
+        if (self->m_menu) {
+            self->m_menu->Initialize(self->m_device, self->m_context);
+        }
     }
     
     // Get config
-    Config* config = self->m_menu->GetConfig();
-    
-    // Process input
-    self->m_inputManager->Update();
+    Config* config = self->m_menu ? self->m_menu->GetConfig() : nullptr;
+    if (!config) {
+        return self->m_originalPresent(pSwapChain, SyncInterval, Flags);
+    }
     
     // Check for menu toggle
-    if (self->m_inputManager->IsKeyJustPressed(config->MenuKey)) {
-        self->m_menu->Toggle();
+    if (self->m_inputManager && self->m_inputManager->IsKeyJustPressed(config->MenuKey)) {
+        if (self->m_menu) {
+            self->m_menu->Toggle();
+        }
     }
     
     // Check for enable toggle
-    if (self->m_inputManager->IsKeyJustPressed(config->ToggleKey)) {
+    if (self->m_inputManager && self->m_inputManager->IsKeyJustPressed(config->ToggleKey)) {
         config->Enabled = !config->Enabled;
         config->SetModified();
     }
     
     // Frame generation logic
-    static ID3D11Texture2D* lastFrameTexture = nullptr;
-    static bool generatingInterpolatedFrames = false;
-    static int interpolatedFramesRemaining = 0;
-    
-    if (config->Enabled && !self->m_menu->IsOpen()) {
+    if (config->Enabled && self->m_menu && !self->m_menu->IsOpen()) {
         // Get backbuffer texture
         ID3D11Texture2D* currentFrame = self->m_backBuffer;
         
-        if (currentFrame) {
+        if (currentFrame && self->m_interpolator && self->m_context) {
             // Process the real frame
             self->m_interpolator->ProcessFrame(currentFrame);
             
@@ -248,13 +259,19 @@ HRESULT __stdcall D3D11Hook::HookedPresent(IDXGISwapChain* pSwapChain, UINT Sync
     }
     
     // Draw menu on top
-    if (self->m_menu->IsOpen()) {
-        self->m_menu->Render(self->m_mainRenderTargetView);
+    if (self->m_menu && self->m_menu->IsOpen()) {
+        if (self->m_mainRenderTargetView) {
+            self->m_menu->Render(self->m_mainRenderTargetView);
+        }
         
         // Block game input when menu is open
-        self->m_inputManager->BlockGameInput(true);
+        if (self->m_inputManager) {
+            self->m_inputManager->BlockGameInput(true);
+        }
     } else {
-        self->m_inputManager->BlockGameInput(false);
+        if (self->m_inputManager) {
+            self->m_inputManager->BlockGameInput(false);
+        }
     }
     
     // Call original Present
@@ -265,11 +282,17 @@ HRESULT __stdcall D3D11Hook::HookedResizeBuffers(IDXGISwapChain* pSwapChain, UIN
                                                    UINT Width, UINT Height, DXGI_FORMAT NewFormat,
                                                    UINT SwapChainFlags) {
     D3D11Hook* self = s_instance;
-    if (!self) return self->m_originalResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
+    
+    // Call original if self is null
+    if (!self || !self->m_originalResizeBuffers) {
+        return DXGI_ERROR_INVALID_CALL;
+    }
     
     // Release resources before resize
     self->ReleaseRenderTarget();
-    self->m_menu->Shutdown();
+    if (self->m_menu) {
+        self->m_menu->Shutdown();
+    }
     
     // Call original ResizeBuffers
     HRESULT hr = self->m_originalResizeBuffers(pSwapChain, BufferCount, Width, Height, NewFormat, SwapChainFlags);
@@ -277,8 +300,12 @@ HRESULT __stdcall D3D11Hook::HookedResizeBuffers(IDXGISwapChain* pSwapChain, UIN
     if (SUCCEEDED(hr)) {
         // Recreate resources
         self->CreateRenderTarget(pSwapChain);
-        self->m_interpolator->Initialize(self->m_device, self->m_context, Width, Height);
-        self->m_menu->Initialize(self->m_device, self->m_context);
+        if (self->m_interpolator) {
+            self->m_interpolator->Initialize(self->m_device, self->m_context, Width, Height);
+        }
+        if (self->m_menu) {
+            self->m_menu->Initialize(self->m_device, self->m_context);
+        }
     }
     
     return hr;
@@ -287,7 +314,7 @@ HRESULT __stdcall D3D11Hook::HookedResizeBuffers(IDXGISwapChain* pSwapChain, UIN
 void __stdcall D3D11Hook::HookedDrawIndexed(ID3D11DeviceContext* pContext, UINT IndexCount,
                                              UINT StartIndexLocation, INT BaseVertexLocation) {
     D3D11Hook* self = s_instance;
-    if (self && self->m_originalDrawIndexed) {
+    if (self && self->m_originalDrawIndexed && pContext) {
         self->m_originalDrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
     }
 }
@@ -295,7 +322,7 @@ void __stdcall D3D11Hook::HookedDrawIndexed(ID3D11DeviceContext* pContext, UINT 
 void __stdcall D3D11Hook::HookedDraw(ID3D11DeviceContext* pContext, UINT VertexCount,
                                       UINT StartVertexLocation) {
     D3D11Hook* self = s_instance;
-    if (self && self->m_originalDraw) {
+    if (self && self->m_originalDraw && pContext) {
         self->m_originalDraw(pContext, VertexCount, StartVertexLocation);
     }
 }
