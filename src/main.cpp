@@ -30,23 +30,26 @@ namespace FrameGen {
     D3D11Hook* g_d3dHook = nullptr;
 }
 
-// Logging to file in game directory
+// Logging to file in game directory - use simple path first
 static const char* LOG_FILE = "framedll.log";
+static bool g_logInitialized = false;
 
 void LogMsg(const char* fmt, ...) {
-    char logPath[MAX_PATH];
-    GetModuleFileNameA(nullptr, logPath, MAX_PATH);
-    std::string path(logPath);
-    size_t pos = path.find_last_of("\\/");
-    if (pos != std::string::npos) {
-        path = path.substr(0, pos + 1) + LOG_FILE;
-    } else {
-        path = LOG_FILE;
+    // Try multiple locations for log file
+    const char* paths[] = {
+        "framedll.log",                              // Current directory (game dir)
+        "C:\\framedll.log",                          // Root C: for easy access
+        ".\\framedll.log"                            // Explicit current dir
+    };
+    
+    FILE* f = nullptr;
+    for (const char* path : paths) {
+        f = fopen(path, "a");
+        if (f) break;
     }
-
-    FILE* f = fopen(path.c_str(), "a+");
-    if (!f) return;
-
+    
+    if (!f) return;  // Can't log anywhere
+    
     SYSTEMTIME st;
     GetLocalTime(&st);
     fprintf(f, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
@@ -56,12 +59,13 @@ void LogMsg(const char* fmt, ...) {
     vfprintf(f, fmt, args);
     va_end(args);
     fprintf(f, "\n");
+    fflush(f);  // Force write
     fclose(f);
 
     // Also to debugger
-    char buf[1024];
+    char buf[2048];
     va_start(args, fmt);
-    vsprintf_s(buf, fmt, args);
+    vsprintf_s(buf, sizeof(buf), fmt, args);
     va_end(args);
     OutputDebugStringA(buf);
 }
@@ -128,7 +132,8 @@ extern "C" {
 }
 
 extern "C" {
-    HRESULT WINAPI Proxy_D3D11CreateDevice(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
+    // Proxy functions - these are exported via exports.def with proper names
+    __declspec(dllexport) HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
         HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL* pFeatureLevels, UINT FeatureLevels,
         UINT SDKVersion, ID3D11Device** ppDevice, D3D_FEATURE_LEVEL* pFeatureLevel,
         ID3D11DeviceContext** ppImmediateContext) 
@@ -158,7 +163,7 @@ extern "C" {
         return hr;
     }
 
-    HRESULT WINAPI Proxy_D3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
+    __declspec(dllexport) HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
         HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL* pFeatureLevels, UINT FeatureLevels,
         UINT SDKVersion, const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc, IDXGISwapChain** ppSwapChain,
         ID3D11Device** ppDevice, D3D_FEATURE_LEVEL* pFeatureLevel, ID3D11DeviceContext** ppImmediateContext)
