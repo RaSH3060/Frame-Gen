@@ -4,13 +4,51 @@
 
 #define NOMINMAX
 #include <Windows.h>
-#include <d3d11.h>
-#include <dxgi.h>
+// Don't include d3d11.h here to avoid name conflicts with our proxy exports
+// We'll forward declare what we need
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
 #include <mutex>
 #include <string>
+
+// Forward declarations from d3d11.h
+interface ID3D11Device;
+interface ID3D11DeviceContext;
+interface IDXGIAdapter;
+interface IDXGISwapChain;
+
+typedef enum D3D_DRIVER_TYPE {
+    D3D_DRIVER_TYPE_UNKNOWN = 0,
+    D3D_DRIVER_TYPE_HARDWARE = 1,
+    D3D_DRIVER_TYPE_REFERENCE = 2,
+    D3D_DRIVER_TYPE_NULL = 3,
+    D3D_DRIVER_TYPE_SOFTWARE = 4,
+    D3D_DRIVER_TYPE_WARP = 5
+} D3D_DRIVER_TYPE;
+
+typedef enum D3D_FEATURE_LEVEL {
+    D3D_FEATURE_LEVEL_9_1 = 0x9100,
+    D3D_FEATURE_LEVEL_9_2 = 0x9200,
+    D3D_FEATURE_LEVEL_9_3 = 0x9300,
+    D3D_FEATURE_LEVEL_10_0 = 0xa000,
+    D3D_FEATURE_LEVEL_10_1 = 0xa100,
+    D3D_FEATURE_LEVEL_11_0 = 0xb000,
+    D3D_FEATURE_LEVEL_11_1 = 0xb100,
+    D3D_FEATURE_LEVEL_12_0 = 0xc000,
+    D3D_FEATURE_LEVEL_12_1 = 0xc100
+} D3D_FEATURE_LEVEL;
+
+typedef struct DXGI_SWAP_CHAIN_DESC {
+    void* BufferDesc;
+    void* SampleDesc;
+    UINT BufferUsage;
+    UINT BufferCount;
+    void* OutputWindow;
+    BOOL Windowed;
+    void* SwapEffect;
+    UINT Flags;
+} DXGI_SWAP_CHAIN_DESC;
 
 #include "MinHook.h"
 #include "d3d11_hook.h"
@@ -18,6 +56,10 @@
 #include "menu.h"
 #include "input_manager.h"
 #include "config.h"
+
+// Now include d3d11.h for the actual types (after our forward declarations)
+#include <d3d11.h>
+#include <dxgi.h>
 
 namespace FrameGen {
     HMODULE g_hModule = nullptr;
@@ -116,6 +158,17 @@ static void LoadOriginalD3D11() {
     }
 }
 
+// Forward declarations for proxy functions (implemented at bottom)
+HRESULT WINAPI Proxy_D3D11CreateDevice(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
+    HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL* pFeatureLevels, UINT FeatureLevels,
+    UINT SDKVersion, ID3D11Device** ppDevice, D3D_FEATURE_LEVEL* pFeatureLevel,
+    ID3D11DeviceContext** ppImmediateContext);
+
+HRESULT WINAPI Proxy_D3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
+    HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL* pFeatureLevels, UINT FeatureLevels,
+    UINT SDKVersion, const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc, IDXGISwapChain** ppSwapChain,
+    ID3D11Device** ppDevice, D3D_FEATURE_LEVEL* pFeatureLevel, ID3D11DeviceContext** ppImmediateContext);
+
 extern "C" {
     HRESULT WINAPI D3D11CoreCreateDevice() { return E_NOTIMPL; }
     HRESULT WINAPI D3D11CoreCreateLayeredDevice() { return E_NOTIMPL; }
@@ -129,38 +182,14 @@ extern "C" {
     HRESULT WINAPI D3D11DisassembleEffect() { return E_NOTIMPL; }
     HRESULT WINAPI D3D11CompileEffectFromMemory() { return E_NOTIMPL; }
     HRESULT WINAPI D3D11CreateBlob() { return E_NOTIMPL; }
-}
-
-extern "C" {
-    // Proxy functions - these are exported via exports.def with proper names
+    
+    // Proxy exports - names must match exports.def exactly
     __declspec(dllexport) HRESULT WINAPI D3D11CreateDevice(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
         HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL* pFeatureLevels, UINT FeatureLevels,
         UINT SDKVersion, ID3D11Device** ppDevice, D3D_FEATURE_LEVEL* pFeatureLevel,
-        ID3D11DeviceContext** ppImmediateContext) 
+        ID3D11DeviceContext** ppImmediateContext)
     {
-        LogMsg("[API] D3D11CreateDevice called");
-        LoadOriginalD3D11();
-        
-        if (!s_realD3D11) {
-            LogMsg("[ERROR] Original DLL not loaded!");
-            return E_FAIL;
-        }
-
-        HRESULT hr = E_FAIL;
-        if (s_origCreateDevice) {
-            LogMsg("[API] Calling original...");
-            hr = s_origCreateDevice(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, ppDevice, pFeatureLevel, ppImmediateContext);
-        } else {
-            auto fn = (D3D11CreateDeviceFn_t)GetProcAddress(s_realD3D11, "D3D11CreateDevice");
-            if (fn) hr = fn(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, ppDevice, pFeatureLevel, ppImmediateContext);
-        }
-
-        if (SUCCEEDED(hr))
-            LogMsg("[OK] Device: 0x%p, Context: 0x%p", (void*)(ppDevice?*ppDevice:nullptr), (void*)(ppImmediateContext?*ppImmediateContext:nullptr));
-        else
-            LogMsg("[ERROR] Returned 0x%08lX", hr);
-        
-        return hr;
+        return Proxy_D3D11CreateDevice(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, ppDevice, pFeatureLevel, ppImmediateContext);
     }
 
     __declspec(dllexport) HRESULT WINAPI D3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
@@ -168,31 +197,7 @@ extern "C" {
         UINT SDKVersion, const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc, IDXGISwapChain** ppSwapChain,
         ID3D11Device** ppDevice, D3D_FEATURE_LEVEL* pFeatureLevel, ID3D11DeviceContext** ppImmediateContext)
     {
-        LogMsg("[API] D3D11CreateDeviceAndSwapChain called");
-        LoadOriginalD3D11();
-        
-        if (!s_realD3D11) {
-            LogMsg("[ERROR] Original DLL not loaded!");
-            return E_FAIL;
-        }
-
-        HRESULT hr = E_FAIL;
-        if (s_origCreateDeviceAndSwapChain) {
-            LogMsg("[API] Calling original...");
-            hr = s_origCreateDeviceAndSwapChain(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, pSwapChainDesc, ppSwapChain, ppDevice, pFeatureLevel, ppImmediateContext);
-        } else {
-            auto fn = (D3D11CreateDeviceAndSwapChainFn_t)GetProcAddress(s_realD3D11, "D3D11CreateDeviceAndSwapChain");
-            if (fn) hr = fn(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, pSwapChainDesc, ppSwapChain, ppDevice, pFeatureLevel, ppImmediateContext);
-        }
-
-        if (SUCCEEDED(hr)) {
-            LogMsg("[OK] Device: 0x%p, Context: 0x%p, SwapChain: 0x%p",
-                (void*)(ppDevice?*ppDevice:nullptr), (void*)(ppImmediateContext?*ppImmediateContext:nullptr), (void*)(ppSwapChain?*ppSwapChain:nullptr));
-        } else {
-            LogMsg("[ERROR] Returned 0x%08lX", hr);
-        }
-        
-        return hr;
+        return Proxy_D3D11CreateDeviceAndSwapChain(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, pSwapChainDesc, ppSwapChain, ppDevice, pFeatureLevel, ppImmediateContext);
     }
 }
 
@@ -269,4 +274,77 @@ void Shutdown() {
     MH_Uninitialize();
     FrameGen::g_initialized = false;
     LogMsg("[SHUTDOWN] Done.");
+}
+
+// Proxy function implementations (at end to avoid header conflicts)
+HRESULT WINAPI Proxy_D3D11CreateDevice(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
+    HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL* pFeatureLevels, UINT FeatureLevels,
+    UINT SDKVersion, ID3D11Device** ppDevice, D3D_FEATURE_LEVEL* pFeatureLevel,
+    ID3D11DeviceContext** ppImmediateContext)
+{
+    LogMsg("[API] D3D11CreateDevice called");
+    LoadOriginalD3D11();
+    
+    if (!s_realD3D11) {
+        LogMsg("[ERROR] Original DLL not loaded!");
+        return E_FAIL;
+    }
+
+    HRESULT hr = E_FAIL;
+    if (s_origCreateDevice) {
+        LogMsg("[API] Calling original D3D11CreateDevice...");
+        hr = s_origCreateDevice(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, ppDevice, pFeatureLevel, ppImmediateContext);
+    } else {
+        auto fn = (D3D11CreateDeviceFn_t)GetProcAddress(s_realD3D11, "D3D11CreateDevice");
+        if (fn) {
+            LogMsg("[API] Calling original via GetProcAddress...");
+            hr = fn(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, ppDevice, pFeatureLevel, ppImmediateContext);
+        } else {
+            LogMsg("[ERROR] GetProcAddress failed for D3D11CreateDevice!");
+        }
+    }
+
+    if (SUCCEEDED(hr))
+        LogMsg("[OK] Device: 0x%p, Context: 0x%p", (void*)(ppDevice?*ppDevice:nullptr), (void*)(ppImmediateContext?*ppImmediateContext:nullptr));
+    else
+        LogMsg("[ERROR] D3D11CreateDevice returned 0x%08lX", hr);
+    
+    return hr;
+}
+
+HRESULT WINAPI Proxy_D3D11CreateDeviceAndSwapChain(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE DriverType,
+    HMODULE Software, UINT Flags, const D3D_FEATURE_LEVEL* pFeatureLevels, UINT FeatureLevels,
+    UINT SDKVersion, const DXGI_SWAP_CHAIN_DESC* pSwapChainDesc, IDXGISwapChain** ppSwapChain,
+    ID3D11Device** ppDevice, D3D_FEATURE_LEVEL* pFeatureLevel, ID3D11DeviceContext** ppImmediateContext)
+{
+    LogMsg("[API] D3D11CreateDeviceAndSwapChain called");
+    LoadOriginalD3D11();
+    
+    if (!s_realD3D11) {
+        LogMsg("[ERROR] Original DLL not loaded!");
+        return E_FAIL;
+    }
+
+    HRESULT hr = E_FAIL;
+    if (s_origCreateDeviceAndSwapChain) {
+        LogMsg("[API] Calling original D3D11CreateDeviceAndSwapChain...");
+        hr = s_origCreateDeviceAndSwapChain(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, pSwapChainDesc, ppSwapChain, ppDevice, pFeatureLevel, ppImmediateContext);
+    } else {
+        auto fn = (D3D11CreateDeviceAndSwapChainFn_t)GetProcAddress(s_realD3D11, "D3D11CreateDeviceAndSwapChain");
+        if (fn) {
+            LogMsg("[API] Calling original via GetProcAddress...");
+            hr = fn(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion, pSwapChainDesc, ppSwapChain, ppDevice, pFeatureLevel, ppImmediateContext);
+        } else {
+            LogMsg("[ERROR] GetProcAddress failed for D3D11CreateDeviceAndSwapChain!");
+        }
+    }
+
+    if (SUCCEEDED(hr)) {
+        LogMsg("[OK] Device: 0x%p, Context: 0x%p, SwapChain: 0x%p",
+            (void*)(ppDevice?*ppDevice:nullptr), (void*)(ppImmediateContext?*ppImmediateContext:nullptr), (void*)(ppSwapChain?*ppSwapChain:nullptr));
+    } else {
+        LogMsg("[ERROR] D3D11CreateDeviceAndSwapChain returned 0x%08lX", hr);
+    }
+    
+    return hr;
 }
