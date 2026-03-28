@@ -100,9 +100,12 @@ static void LoadOriginalD3D11() {
         s_originalD3D11CreateDevice = (D3D11CreateDevice_t)GetProcAddress(s_realD3D11, "D3D11CreateDevice");
         s_originalD3D11CreateDeviceAndSwapChain = (D3D11CreateDeviceAndSwapChain_t)GetProcAddress(s_realD3D11, "D3D11CreateDeviceAndSwapChain");
         
-        OutputDebugStringA("FrameGen: Loaded original D3D11 functions\n");
+        char msg[256];
+        sprintf_s(msg, sizeof(msg), "FrameGen: Got functions - CreateDevice=%p, CreateDeviceAndSwapChain=%p\n", 
+                  (void*)s_originalD3D11CreateDevice, (void*)s_originalD3D11CreateDeviceAndSwapChain);
+        OutputDebugStringA(msg);
     } else {
-        OutputDebugStringA("FrameGen: Failed to load original d3d11.dll\n");
+        OutputDebugStringA("FrameGen: CRITICAL - Failed to load original d3d11.dll!\n");
     }
 }
 
@@ -120,11 +123,19 @@ extern "C" {
         ID3D11DeviceContext** ppImmediateContext
     ) {
         LoadOriginalD3D11();
+        
+        OutputDebugStringA("FrameGen: D3D11CreateDevice called\n");
+        
         if (s_originalD3D11CreateDevice) {
-            return s_originalD3D11CreateDevice(pAdapter, DriverType, Software, Flags, 
+            HRESULT hr = s_originalD3D11CreateDevice(pAdapter, DriverType, Software, Flags, 
                                                pFeatureLevels, FeatureLevels, SDKVersion,
                                                ppDevice, pFeatureLevel, ppImmediateContext);
+            char msg[256];
+            sprintf_s(msg, sizeof(msg), "FrameGen: D3D11CreateDevice returned %08X\n", hr);
+            OutputDebugStringA(msg);
+            return hr;
         }
+        
         // Fallback - try to load real d3d11.dll again and call directly
         char systemDir[MAX_PATH];
         GetSystemDirectoryA(systemDir, MAX_PATH);
@@ -134,11 +145,16 @@ extern "C" {
         if (realD3D11) {
             D3D11CreateDevice_t func = (D3D11CreateDevice_t)GetProcAddress(realD3D11, "D3D11CreateDevice");
             if (func) {
-                return func(pAdapter, DriverType, Software, Flags, 
+                OutputDebugStringA("FrameGen: Calling D3D11CreateDevice via fallback\n");
+                HRESULT hr = func(pAdapter, DriverType, Software, Flags, 
                            pFeatureLevels, FeatureLevels, SDKVersion,
                            ppDevice, pFeatureLevel, ppImmediateContext);
+                FreeLibrary(realD3D11);
+                return hr;
             }
         }
+        
+        OutputDebugStringA("FrameGen: D3D11CreateDevice - no function available!\n");
         return E_FAIL;
     }
 
@@ -157,12 +173,20 @@ extern "C" {
         ID3D11DeviceContext** ppImmediateContext
     ) {
         LoadOriginalD3D11();
+        
+        OutputDebugStringA("FrameGen: D3D11CreateDeviceAndSwapChain called\n");
+        
         if (s_originalD3D11CreateDeviceAndSwapChain) {
-            return s_originalD3D11CreateDeviceAndSwapChain(pAdapter, DriverType, Software, Flags,
+            HRESULT hr = s_originalD3D11CreateDeviceAndSwapChain(pAdapter, DriverType, Software, Flags,
                                                            pFeatureLevels, FeatureLevels, SDKVersion,
                                                            pSwapChainDesc, ppSwapChain, ppDevice,
                                                            pFeatureLevel, ppImmediateContext);
+            char msg[256];
+            sprintf_s(msg, sizeof(msg), "FrameGen: D3D11CreateDeviceAndSwapChain returned %08X\n", hr);
+            OutputDebugStringA(msg);
+            return hr;
         }
+        
         // Fallback - try to load real d3d11.dll again and call directly
         char systemDir[MAX_PATH];
         GetSystemDirectoryA(systemDir, MAX_PATH);
@@ -172,14 +196,35 @@ extern "C" {
         if (realD3D11) {
             D3D11CreateDeviceAndSwapChain_t func = (D3D11CreateDeviceAndSwapChain_t)GetProcAddress(realD3D11, "D3D11CreateDeviceAndSwapChain");
             if (func) {
-                return func(pAdapter, DriverType, Software, Flags,
+                OutputDebugStringA("FrameGen: Calling D3D11CreateDeviceAndSwapChain via fallback\n");
+                HRESULT hr = func(pAdapter, DriverType, Software, Flags,
                            pFeatureLevels, FeatureLevels, SDKVersion,
                            pSwapChainDesc, ppSwapChain, ppDevice,
                            pFeatureLevel, ppImmediateContext);
+                FreeLibrary(realD3D11);
+                return hr;
             }
         }
+        
+        OutputDebugStringA("FrameGen: D3D11CreateDeviceAndSwapChain - no function available!\n");
         return E_FAIL;
     }
+}
+
+// Stub implementations for additional exports
+extern "C" {
+    HRESULT WINAPI D3D11CoreCreateDevice() { return E_NOTIMPL; }
+    HRESULT WINAPI D3D11CoreCreateLayeredDevice() { return E_NOTIMPL; }
+    SIZE_T WINAPI D3D11CoreGetLayeredDeviceSize() { return 0; }
+    HRESULT WINAPI D3D11CoreRegisterLayers() { return E_NOTIMPL; }
+    HRESULT WINAPI D3D11CreateDeviceForD3D12() { return E_NOTIMPL; }
+    HRESULT WINAPI D3D11On12CreateDevice() { return E_NOTIMPL; }
+    HRESULT WINAPI D3D11Reflect() { return E_NOTIMPL; }
+    HRESULT WINAPI D3D11SerializeStateBlock() { return E_NOTIMPL; }
+    HRESULT WINAPI D3D11DisassembleStateBlock() { return E_NOTIMPL; }
+    HRESULT WINAPI D3D11DisassembleEffect() { return E_NOTIMPL; }
+    HRESULT WINAPI D3D11CompileEffectFromMemory() { return E_NOTIMPL; }
+    HRESULT WINAPI D3D11CreateBlob() { return E_NOTIMPL; }
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
