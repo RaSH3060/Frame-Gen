@@ -3,3 +3,16 @@ EXPORTS
     D3D11CreateDevice @100 NONAME
     D3D11CreateDeviceAndSwapChain @101 NONAME
     
+; Additional exports that some games might need (stubs)
+    D3D11CoreCreateDevice @102 NONAME
+    D3D11CoreCreateLayeredDevice @103 NONAME
+    D3D11CoreGetLayeredDeviceSize @104 NONAME
+    D3D11CoreRegisterLayers @105 NONAME
+    D3D11CreateDeviceForD3D12 @106 NONAME
+    D3D11On12CreateDevice @107 NONAME
+    D3D11Reflect @108 NONAME
+    D3D11SerializeStateBlock @109 NONAME
+    D3D11DisassembleStateBlock @110 NONAME
+    D3D11DisassembleEffect @111 NONAME
+    D3D11CompileEffectFromMemory @112 NONAME
+    D3D11CreateBlob @113 NONAME
